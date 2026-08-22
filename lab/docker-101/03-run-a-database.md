@@ -2,47 +2,94 @@
 
 Databases are one of the best reasons to use containers: no local install, no
 version conflicts, and you can throw them away when you're done. Let's run
-**PostgreSQL**.
+**PostgreSQL** — and to show off container isolation, we'll run **three versions at
+once**.
 
-## Start Postgres
+## Start your first Postgres
 
 ```bash terminal-id=main
-docker run --name postgres1 -d -e POSTGRES_PASSWORD=dev -p 5432:5432 postgres:16
+docker run -d --name postgres1 -e POSTGRES_PASSWORD=dev -p 5432:5432 postgres:16
 ```
 
-One new flag joins the ones you already know:
+The flags:
 
 | Flag | Meaning |
 |------|---------|
-| `-e POSTGRES_PASSWORD=dev` | Set an **environment variable** inside the container. The Postgres image requires this one to initialise |
-| `postgres:16` | The image **name and tag** — pin the major version instead of `latest` |
+| `-d` | **Detached** — run in the background |
+| `--name postgres1` | Name the container |
+| `-e POSTGRES_PASSWORD=dev` | Set an **environment variable** — the Postgres image requires this one |
+| `-p 5432:5432` | Publish the port (`host:container`) |
+| `postgres:16` | Image **name and tag** — pin the major version instead of `latest` |
 
-## Both containers are running now
+## Now run two more — different versions, side by side
 
-You started `web` in the last section and `postgres1` just now. Confirm both:
+Here's the payoff of isolation. Start Postgres **15** and **13** too. Each gets its
+own name and its **own host port** (`5433`, `5434`), all mapping to `5432` inside
+their container:
+
+```bash terminal-id=main
+docker run -d --name postgres2 -e POSTGRES_PASSWORD=dev -p 5433:5432 postgres:15
+```
+
+```bash terminal-id=main
+docker run -d --name postgres3 -e POSTGRES_PASSWORD=dev -p 5434:5432 postgres:13
+```
+
+Three different PostgreSQL versions, running at the same time on one machine,
+completely isolated from each other. Try *that* with a traditional install.
+
+## See them all
 
 ```bash terminal-id=main
 docker ps
 ```
 
-Two containers, side by side, fully isolated from each other — each on its own
-published port (`8080` and `5432`).
+You'll see `postgres1`, `postgres2`, and `postgres3` (plus the `web` server from
+the last section) — each on its own published port.
 
-## Run a command inside the container
+## Connect and run queries
 
-`docker exec` runs a command **inside** an already-running container. Let's list
-the databases Postgres created, using its built-in `psql` client:
+`docker exec` runs a command **inside** a container. Postgres ships with the `psql`
+client, so you can query the database without installing anything locally.
+
+**List the databases** (`\l` is psql's "list databases" meta-command):
 
 ```bash terminal-id=main
 docker exec postgres1 psql -U postgres -c "\l"
 ```
 
-That's the power of `exec` — you didn't need `psql` installed on your machine. It
+**List the schemas** (`\dn`):
+
+```bash terminal-id=main
+docker exec postgres1 psql -U postgres -c "\dn"
+```
+
+**See what's connected right now** — a real SQL query against the `pg_stat_activity`
+system view:
+
+```bash terminal-id=main
+docker exec postgres1 psql -U postgres -c "SELECT * FROM pg_stat_activity;"
+```
+
+That's the power of `exec`: you didn't need `psql` installed on your machine. It
 lives inside the container, and you reached in to run it.
 
-> **Run many versions at once.** Because each container is isolated and gets its own
-> published port, you could start `postgres:16`, `postgres:15`, and `postgres:13`
-> together — on ports `5432`, `5433`, `5434` — without them ever colliding.
+## Clean up
 
-Leave both containers running. Next you'll look at the images they came from.
-Continue to **Images & Registries**.
+You don't need three databases for the rest of the lab. Because containers are
+disposable, tearing them down is one command. `-f` forces removal even though
+they're running:
+
+```bash terminal-id=main
+docker rm -f postgres1 postgres2 postgres3
+```
+
+Gone — no leftover processes, no config to undo. That disposability is the whole
+point.
+
+> **Run many versions at once.** Each container is isolated and gets its own
+> published port, so `postgres:16`, `:15`, and `:13` never collide. This is how
+> teams test against multiple database versions without a mess.
+
+Next, you'll meet the real application you'll spend the rest of this lab on.
+Continue to **Meet the Product Catalog**.

@@ -15,6 +15,10 @@ state:
     running: false      # nginx web server (Section 2)
   pg:
     running: false      # postgres1 database (Section 3)
+  pg2:
+    running: false      # postgres2 (Postgres 15)
+  pg3:
+    running: false      # postgres3 (Postgres 13)
   baseline:
     built: false        # catalog-service:baseline image (Section 7)
   dhi:
@@ -147,19 +151,97 @@ scenarios:
         - "Status: Downloaded newer image for postgres:16"
         - { text: "f0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d", delay: start }
 
-  - id: exec-psql-list
+  - id: run-postgres2
+    when:
+      command: [docker, run]
+      args: { --name: { oneOf: [postgres2] } }
+    then:
+      state: { pg2.running: true }
+      output:
+        - "Unable to find image 'postgres:15' locally"
+        - { text: "15: Pulling from library/postgres", delay: short }
+        - { text: "c3d4e5f6a7b8: Pull complete", delay: pull }
+        - "Status: Downloaded newer image for postgres:15"
+        - { text: "a2b3c4d5e6f70819a2b3c4d5e6f70819a2b3c4d5e6f70819a2b3c4d5e6f70819", delay: start }
+
+  - id: run-postgres3
+    when:
+      command: [docker, run]
+      args: { --name: { oneOf: [postgres3] } }
+    then:
+      state: { pg3.running: true }
+      output:
+        - "Unable to find image 'postgres:13' locally"
+        - { text: "13: Pulling from library/postgres", delay: short }
+        - { text: "d4e5f6a7b8c9: Pull complete", delay: pull }
+        - "Status: Downloaded newer image for postgres:13"
+        - { text: "b3c4d5e6f7a8091ab3c4d5e6f7a8091ab3c4d5e6f7a8091ab3c4d5e6f7a8091a", delay: start }
+
+  # psql queries via `docker exec … -c "<query>"`. Match on the -c value so each
+  # meta-command / query gets its own output. Specific first, generic last.
+  - id: exec-psql-databases
     when:
       command: [docker, exec]
-      args: { 0: { oneOf: [postgres1] } }
+      args: { -c: { oneOf: ['\l', "\\l", l, list] } }
     then:
       output:
         - "                                  List of databases"
         - "   Name    |  Owner   | Encoding |  Collate   |   Ctype    | Access privileges"
         - "-----------+----------+----------+------------+------------+-------------------"
+        - " catalog   | postgres | UTF8     | en_US.utf8 | en_US.utf8 |"
         - " postgres  | postgres | UTF8     | en_US.utf8 | en_US.utf8 |"
         - " template0 | postgres | UTF8     | en_US.utf8 | en_US.utf8 | =c/postgres"
         - " template1 | postgres | UTF8     | en_US.utf8 | en_US.utf8 | =c/postgres"
-        - "(3 rows)"
+        - "(4 rows)"
+
+  - id: exec-psql-schemas
+    when:
+      command: [docker, exec]
+      args: { -c: { oneOf: ['\dn', "\\dn", dn] } }
+    then:
+      output:
+        - "        List of schemas"
+        - "  Name  |       Owner"
+        - "--------+-------------------"
+        - " public | pg_database_owner"
+        - "(1 row)"
+
+  - id: exec-psql-activity
+    when:
+      command: [docker, exec]
+      args: { -c: { oneOf: ["SELECT * FROM pg_stat_activity;", "SELECT * from pg_stat_activity;"] } }
+    then:
+      output:
+        - " datid | datname  | pid | usename  | application_name |  state  |         query"
+        - "-------+----------+-----+----------+------------------+---------+-----------------------------"
+        - " 16384 | postgres | 71  | postgres | psql             | active  | SELECT * FROM pg_stat_activity;"
+        - " 16384 | catalog  | 68  | postgres |                  | idle    |"
+        - "(2 rows)"
+
+  # Fallback for any other psql exec (e.g. against postgres2 / postgres3).
+  - id: exec-psql-generic
+    when:
+      command: [docker, exec]
+      args: { 0: { oneOf: [postgres1, postgres2, postgres3] } }
+    then:
+      output:
+        - "                                  List of databases"
+        - "   Name    |  Owner   | Encoding"
+        - "-----------+----------+----------"
+        - " postgres  | postgres | UTF8"
+        - "(1 row)"
+
+  # Force-remove the three databases (Section 3 cleanup).
+  - id: rm-postgres-all
+    when:
+      command: [docker, rm]
+      args: { -f: { any: true } }
+    then:
+      state: { pg.running: false, pg2.running: false, pg3.running: false }
+      output:
+        - "postgres1"
+        - "postgres2"
+        - "postgres3"
 
   # ===========================================================================
   # Section 4 - images & registries
@@ -317,6 +399,18 @@ scenarios:
         - "ff66aa77bb88   wiremock/wiremock:3.5.4     Up 22 seconds   8080/tcp                 catalog-wiremock-1"
         - "1a2b3c4d5e6f   dpage/pgadmin4              Up 22 seconds   0.0.0.0:5050->80/tcp     catalog-pgadmin-1"
         - "2b3c4d5e6f7a   provectuslabs/kafka-ui      Up 22 seconds   0.0.0.0:8080->8080/tcp   catalog-kafka-ui-1"
+
+  - id: ps-three-pg
+    when:
+      command: [docker, ps]
+      state: { pg3.running: true }
+    then:
+      output:
+        - "CONTAINER ID   IMAGE         STATUS         PORTS                    NAMES"
+        - "7b3a9f4c1e0d   nginx         Up 6 minutes   0.0.0.0:8080->80/tcp     web"
+        - "f0e1d2c3b4a5   postgres:16   Up 3 minutes   0.0.0.0:5432->5432/tcp   postgres1"
+        - "a2b3c4d5e6f7   postgres:15   Up 2 minutes   0.0.0.0:5433->5432/tcp   postgres2"
+        - "b3c4d5e6f7a8   postgres:13   Up 1 minute    0.0.0.0:5434->5432/tcp   postgres3"
 
   - id: ps-web-and-pg
     when:

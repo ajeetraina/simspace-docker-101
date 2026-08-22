@@ -42,8 +42,8 @@ containerised it. Read the Dockerfile to see how:
 cat Dockerfile
 ```
 
-Notice `FROM node:20` — a full Node base image. It works, but as you'll see in
-Section 9, "works" and "secure" are not the same thing.
+Notice `FROM node:20` — a full Node base image. It works, but as you'll see when
+you scan it later, "works" and "secure" are not the same thing.
 
 Now open the service code that turns a request into a database query and a Kafka
 event:

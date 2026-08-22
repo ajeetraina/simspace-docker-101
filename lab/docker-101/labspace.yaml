@@ -231,10 +231,6 @@ sections:
     contentPath: 02-first-web-server.md
   - title: "Run a Database"
     contentPath: 03-run-a-database.md
-  - title: "Images & Registries"
-    contentPath: 04-images-and-registries.md
-  - title: "Managing Containers"
-    contentPath: 05-managing-containers.md
   - title: "Meet the Product Catalog"
     contentPath: 06-product-catalog.md
   - title: "Build & Run with Compose"

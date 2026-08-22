@@ -53,5 +53,4 @@ You'll see nginx's startup lines and the request your `curl` just made.
 > reachable *inside* Docker's network. Publishing it makes it reachable from your
 > machine.
 
-Leave `web` running — you'll manage it later. Next, a database. Continue to
-**Run a Database**.
+Leave `web` running for now. Next, a database. Continue to **Run a Database**.
