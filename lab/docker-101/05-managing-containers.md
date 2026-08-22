@@ -69,5 +69,6 @@ docker rm postgres1
 > (delete). Add `--rm` to `docker run` and Docker removes the container
 > automatically when it exits.
 
-Your machine is clean. Now for the main event — building your **own** image.
-Continue to **Build Your Own Image**.
+Your machine is clean. Now for the main event — a **real application** you'll take
+all the way from source to a hardened, scanned image. Continue to **Meet the
+Product Catalog**.

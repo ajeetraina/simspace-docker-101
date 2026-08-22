@@ -1,17 +1,20 @@
 title: "Docker 101"
 description: >
-  Your first hour with Docker, entirely in the browser. Run containers, publish
-  ports, work with images and registries, then containerise a real Node.js app -
-  the Product Catalog service - and bring the whole stack up with Compose. Every
-  command is simulated, so nothing breaks and there is nothing to install.
+  Your first hours with Docker, entirely in the browser. Run containers, publish
+  ports, and work with images - then take a real Node.js app, the Product Catalog
+  service (Postgres, Kafka, LocalStack, WireMock), all the way through the SDLC:
+  clone, build, run with Compose, test, scan for vulnerabilities with Docker Scout,
+  and harden it with Docker Hardened Images until the vulnerability count is
+  near-zero. Every command is simulated, so nothing breaks and there is nothing to
+  install.
 
-# Landing-page card. Shown when this repo has two or more labs; harmless for a
-# single lab. labs.json is GENERATED from this block - never edit labs.json by hand.
+# Landing-page card. `order: 2` puts the hands-on lab after the slides deck.
+# labs.json is GENERATED from this block - never edit labs.json by hand.
 catalog:
   icon: sailing
   order: 2
-  tags: ["docker", "containers", "beginner", "compose", "getting started"]
-  estimatedMinutes: 60
+  tags: ["docker", "containers", "compose", "scout", "dhi", "sdlc"]
+  estimatedMinutes: 90
 
 # Command behaviour lives in simulator.yaml (relative to this file).
 simulator: simulator.yaml
@@ -22,51 +25,54 @@ terminals:
     title: Terminal
     icon: terminal
 
-# Seed the virtual filesystem with the Product Catalog source. Built-in ls/cat
-# reflect these immediately; the Dockerfile and compose.yaml you write later are
-# added on top by save-as blocks.
+# Seed the virtual filesystem with the Product Catalog source (the
+# dockersamples/catalog-service-node app). Built-in ls/cat reflect these
+# immediately; the `git clone` in Section 6 is cosmetic - the files are already
+# here - and the hardened Dockerfile you write in Section 10 is added on top.
 files:
   README.md: |
-    # product-catalog
+    # catalog-service-node
 
-    A small Product Catalog service: a REST API over a PostgreSQL product
-    database, with a React frontend. In this lab you containerise it.
+    Product Catalog service: a REST API over a PostgreSQL product database, wired
+    to Kafka (events), LocalStack (S3 uploads) and WireMock (an upstream pricing
+    API), with a small React frontend. It ships a Dockerfile and a compose.yaml so
+    you can build and run the whole stack.
 
     Layout:
       backend    src/            Express API (Node.js)
       frontend   frontend/       React SPA (Vite)
       database   db/schema.sql   PostgreSQL schema + seed data
 
-    Run locally:  npm install && npm start   (needs PostgreSQL)
-    API:          http://localhost:3000/api/products
-
-    There is no Dockerfile yet. You write one in Section 6.
+    Run the stack:  docker compose up -d
+    API:            http://localhost:3000/api/products
+    Web client:     http://localhost:5173
   package.json: |
     {
-      "name": "product-catalog",
+      "name": "catalog-service-node",
       "version": "1.0.0",
-      "description": "Product Catalog REST API over PostgreSQL",
+      "description": "Product Catalog REST API over Postgres, with Kafka, LocalStack (S3) and WireMock",
       "main": "src/index.js",
       "scripts": {
         "start": "node src/index.js",
-        "dev": "nodemon src/index.js"
+        "dev": "nodemon src/index.js",
+        "unit-test": "vitest run test/unit",
+        "integration-test": "vitest run test/integration"
       },
       "dependencies": {
         "express": "^4.19.2",
-        "pg": "^8.11.5"
+        "pg": "^8.11.5",
+        "kafkajs": "^2.2.4",
+        "@aws-sdk/client-s3": "^3.588.0",
+        "axios": "^1.7.2"
       },
       "devDependencies": {
-        "nodemon": "^3.1.0"
+        "nodemon": "^3.1.0",
+        "vitest": "^1.6.0",
+        "testcontainers": "^10.9.0"
       }
     }
   package-lock.json: |
-    {
-      "name": "product-catalog",
-      "version": "1.0.0",
-      "lockfileVersion": 3,
-      "requires": true,
-      "packages": {}
-    }
+    { "name": "catalog-service-node", "lockfileVersion": 3, "requires": true, "packages": {} }
   src/index.js: |
     const express = require("express");
     const products = require("./routes/products");
@@ -75,31 +81,59 @@ files:
     app.use(express.json());
     app.use("/api/products", products);
 
-    app.listen(3000, () => console.log("product-catalog listening on :3000"));
+    app.listen(3000, () => console.log("catalog-service listening on :3000"));
   src/routes/products.js: |
     const { Router } = require("express");
-    const { pool } = require("../db/pool");
+    const ProductService = require("../services/ProductService");
 
     const router = Router();
 
-    router.get("/", async (_req, res) => {
-      const { rows } = await pool.query("SELECT * FROM products ORDER BY id");
-      res.json(rows);
-    });
-
+    router.get("/", async (_req, res) => res.json(await ProductService.getProducts()));
     router.get("/:id", async (req, res) => {
-      const { rows } = await pool.query("SELECT * FROM products WHERE id = $1", [req.params.id]);
-      if (!rows.length) return res.status(404).json({ error: "not found" });
-      res.json(rows[0]);
+      const product = await ProductService.getProductById(req.params.id);
+      if (!product) return res.status(404).json({ error: "not found" });
+      res.json(product);
     });
 
     module.exports = router;
+  src/services/ProductService.js: |
+    const { pool } = require("../db/pool");
+    const { publish } = require("../events/kafka");
+
+    async function getProducts() {
+      const { rows } = await pool.query("SELECT * FROM products ORDER BY id");
+      return rows;
+    }
+
+    async function getProductById(id) {
+      const { rows } = await pool.query("SELECT * FROM products WHERE id = $1", [id]);
+      return rows[0];
+    }
+
+    async function createProduct(p) {
+      const { rows } = await pool.query(
+        "INSERT INTO products (name, sku, price) VALUES ($1,$2,$3) RETURNING *",
+        [p.name, p.sku, p.price]
+      );
+      // Publish a "product created" event. NOTE: the UPC field is missing here.
+      await publish("products", { id: rows[0].id, name: rows[0].name, sku: rows[0].sku });
+      return rows[0];
+    }
+
+    module.exports = { getProducts, getProductById, createProduct };
   src/db/pool.js: |
     const { Pool } = require("pg");
-
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
     module.exports = { pool };
+  src/events/kafka.js: |
+    const { Kafka } = require("kafkajs");
+    const kafka = new Kafka({ brokers: [process.env.KAFKA_BROKER || "kafka:9092"] });
+    const producer = kafka.producer();
+
+    async function publish(topic, message) {
+      await producer.send({ topic, messages: [{ value: JSON.stringify(message) }] });
+    }
+    module.exports = { producer, publish };
   db/schema.sql: |
     CREATE TABLE IF NOT EXISTS products (
       id    SERIAL PRIMARY KEY,
@@ -114,37 +148,78 @@ files:
     ON CONFLICT (sku) DO NOTHING;
   frontend/package.json: |
     {
-      "name": "product-catalog-frontend",
+      "name": "catalog-frontend",
       "version": "1.0.0",
       "private": true,
       "scripts": { "dev": "vite", "build": "vite build" },
-      "dependencies": {
-        "react": "^18.3.1",
-        "react-dom": "^18.3.1"
-      },
-      "devDependencies": {
-        "vite": "^5.2.0"
-      }
+      "dependencies": { "react": "^18.3.1", "react-dom": "^18.3.1" },
+      "devDependencies": { "vite": "^5.2.0" }
     }
   frontend/src/App.jsx: |
     import { useEffect, useState } from "react";
-
     export default function App() {
       const [products, setProducts] = useState([]);
-      useEffect(() => {
-        fetch("/api/products").then((r) => r.json()).then(setProducts);
-      }, []);
+      useEffect(() => { fetch("/api/products").then((r) => r.json()).then(setProducts); }, []);
       return (
         <main>
           <h1>Product Catalog</h1>
-          <ul>
-            {products.map((p) => (
-              <li key={p.id}>{p.name} - ${p.price}</li>
-            ))}
-          </ul>
+          <ul>{products.map((p) => <li key={p.id}>{p.name} - ${p.price}</li>)}</ul>
         </main>
       );
     }
+  Dockerfile: |
+    # Baseline image the project ships with. It works - but it's big and built on a
+    # full node:20 base, so it carries a lot of packages (and CVEs). You harden it
+    # in Section 10.
+    FROM node:20
+
+    WORKDIR /usr/src/app
+    COPY package*.json ./
+    RUN npm install --production
+    COPY . .
+
+    EXPOSE 3000
+    CMD ["node", "src/index.js"]
+  compose.yaml: |
+    services:
+      backend:
+        build: .
+        ports: ["3000:3000"]
+        environment:
+          DATABASE_URL: postgres://postgres:postgres@postgres:5432/catalog
+          KAFKA_BROKER: kafka:9092
+          AWS_ENDPOINT: http://localstack:4566
+          CATALOG_UPSTREAM: http://wiremock:8080
+        depends_on: [postgres, kafka, localstack, wiremock]
+
+      frontend:
+        build: ./frontend
+        ports: ["5173:5173"]
+        depends_on: [backend]
+
+      postgres:
+        image: postgres:16
+        environment:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: catalog
+
+      kafka:
+        image: confluentinc/cp-kafka:7.6.0
+
+      localstack:
+        image: localstack/localstack:3
+        environment: { SERVICES: s3 }
+
+      wiremock:
+        image: wiremock/wiremock:3.5.4
+
+      pgadmin:
+        image: dpage/pgadmin4
+        ports: ["5050:80"]
+
+      kafka-ui:
+        image: provectuslabs/kafka-ui
+        ports: ["8080:8080"]
 
 # Ordered instruction pages (markdown), rendered in the left-hand panel.
 sections:
@@ -160,13 +235,19 @@ sections:
     contentPath: 04-images-and-registries.md
   - title: "Managing Containers"
     contentPath: 05-managing-containers.md
-  - title: "Build Your Own Image"
-    contentPath: 06-build-your-own-image.md
-  - title: "Multi-Container Apps with Compose"
-    contentPath: 07-compose.md
+  - title: "Meet the Product Catalog"
+    contentPath: 06-product-catalog.md
+  - title: "Build & Run with Compose"
+    contentPath: 07-build-and-compose.md
+  - title: "Test the App"
+    contentPath: 08-test.md
+  - title: "Scan for Vulnerabilities"
+    contentPath: 09-scan.md
+  - title: "Harden It with DHI"
+    contentPath: 10-harden-dhi.md
   - title: Conclusion
-    contentPath: 08-conclusion.md
+    contentPath: 11-conclusion.md
 
 # $$name$$ in markdown is replaced with these values.
 variables:
-  image: product-catalog
+  repo: "https://github.com/dockersamples/catalog-service-node"

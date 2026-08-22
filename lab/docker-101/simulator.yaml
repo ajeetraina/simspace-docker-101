@@ -4,29 +4,32 @@ metadata:
   id: docker-101
   title: "Docker 101"
   summary: >
-    A beginner's tour of Docker: run containers, publish ports, work with images,
-    build your own, and bring a multi-container app up with Compose. Every command
-    is deterministic and simulated - no real daemon, images, or network.
+    A beginner's tour of Docker that grows into a full SDLC: run containers and
+    images, then take the Product Catalog app from clone to build to Compose to
+    tests to a Docker Scout scan, and harden it with a Docker Hardened Image until
+    the vulnerability count is near-zero. Deterministic and fully simulated.
 
 # In-memory state. Scenarios read it in `when.state` and write it in `then.state`.
-# The lab is linear, so these flags track what the learner has started so far.
 state:
   web:
     running: false      # nginx web server (Section 2)
   pg:
     running: false      # postgres1 database (Section 3)
-  app:
-    built: false        # product-catalog image built (Section 6)
-    running: false      # product-catalog container running (Section 6)
-  compose:
-    up: false           # full stack up via compose (Section 7)
+  baseline:
+    built: false        # catalog-service:baseline image (Section 7)
+  dhi:
+    built: false        # catalog-service:dhi hardened image (Section 10)
+  stack:
+    up: false           # full app stack via compose (Section 7)
 
-# Cosmetic pacing so pulls/builds don't print instantly.
+# Cosmetic pacing so pulls/builds/scans don't print instantly.
 settings:
   pace:
     pull: 700     # simulated layer download
     build: 900    # simulated build step
     start: 500    # simulated container start
+    scan: 1100    # simulated Scout analysis
+    clone: 800    # simulated git transfer
 
 defaults:
   unmatched:
@@ -73,7 +76,6 @@ scenarios:
         - " Operating System: Docker Desktop"
         - " Total Memory: 7.657GiB"
 
-  # `docker run hello-world` - no flags, so positional 0 is the image reliably.
   - id: run-hello-world
     when:
       command: [docker, run]
@@ -95,9 +97,8 @@ scenarios:
         - " 4. The daemon streamed that output to the client, which sent it to you."
 
   # ===========================================================================
-  # Section 2 - run nginx as a web server
-  # Every `docker run` in this lab puts --name FIRST so it's always a captured
-  # key regardless of how following flags parse. Match on --name.
+  # Section 2 - run nginx. Every `docker run` puts --name FIRST so it's always a
+  # captured key regardless of how following flags parse. Match on --name.
   # ===========================================================================
   - id: run-nginx
     when:
@@ -121,9 +122,7 @@ scenarios:
       output:
         - "<!DOCTYPE html>"
         - "<html>"
-        - "<head>"
-        - "<title>Welcome to nginx!</title>"
-        - "</head>"
+        - "<head><title>Welcome to nginx!</title></head>"
         - "<body>"
         - "<h1>Welcome to nginx!</h1>"
         - "<p>If you see this page, the nginx web server is successfully installed"
@@ -148,8 +147,6 @@ scenarios:
         - "Status: Downloaded newer image for postgres:16"
         - { text: "f0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d", delay: start }
 
-  # `docker exec postgres1 psql ...` - positional 0 is the container name (no
-  # dashed token precedes it), so this matches both parser models.
   - id: exec-psql-list
     when:
       command: [docker, exec]
@@ -196,19 +193,31 @@ scenarios:
         - "<missing>      2 weeks ago   COPY docker-entrypoint.sh / # buildkit          7.6kB"
         - "<missing>      2 weeks ago   /bin/sh -c #(nop) ADD file:… in /               77.8MB"
 
-  # `docker images` after the product-catalog build shows the image you built on
-  # top of the base images used earlier in the lab.
-  - id: images-built
+  # `docker images` reflects what's been built. First match wins, latest first.
+  - id: images-dhi
     when:
       command: [docker, images]
-      state: { app.built: true }
+      state: { dhi.built: true }
     then:
       output:
-        - "REPOSITORY        TAG       IMAGE ID       CREATED          SIZE"
-        - "product-catalog   latest    a1b2c3d4e5f6   10 seconds ago   214MB"
-        - "postgres          16        b2c3d4e5f6a7   2 weeks ago      438MB"
-        - "nginx             latest    9c704ecd0c69   2 weeks ago      192MB"
-        - "hello-world       latest    c1ec31eb5944   4 months ago     20.4kB"
+        - "REPOSITORY        TAG        IMAGE ID       CREATED          SIZE"
+        - "catalog-service   dhi        9e2b71c4a0f8   10 seconds ago   248MB"
+        - "catalog-service   baseline   3af1c9e0b2d4   6 minutes ago    1.1GB"
+        - "postgres          16         b2c3d4e5f6a7   2 weeks ago      438MB"
+        - "nginx             latest     9c704ecd0c69   2 weeks ago      192MB"
+        - "hello-world       latest     c1ec31eb5944   4 months ago     20.4kB"
+
+  - id: images-baseline
+    when:
+      command: [docker, images]
+      state: { baseline.built: true }
+    then:
+      output:
+        - "REPOSITORY        TAG        IMAGE ID       CREATED          SIZE"
+        - "catalog-service   baseline   3af1c9e0b2d4   30 seconds ago   1.1GB"
+        - "postgres          16         b2c3d4e5f6a7   2 weeks ago      438MB"
+        - "nginx             latest     9c704ecd0c69   2 weeks ago      192MB"
+        - "hello-world       latest     c1ec31eb5944   4 months ago     20.4kB"
 
   - id: images-base
     when:
@@ -222,7 +231,6 @@ scenarios:
 
   # ===========================================================================
   # Section 5 - managing containers
-  # `docker logs <name>` - positional 0 is the container name (matches both models).
   # ===========================================================================
   - id: logs-web
     when:
@@ -235,22 +243,12 @@ scenarios:
         - "nginx: start worker processes"
         - "172.17.0.1 - - \"GET / HTTP/1.1\" 200 615 \"curl/8.7.1\""
 
-  - id: logs-catalog
-    when:
-      command: [docker, logs]
-      args: { 0: { oneOf: [catalog] } }
-    then:
-      output:
-        - "product-catalog listening on :3000"
-        - "GET /api/products 200 - 4ms"
-
   - id: logs-generic
     when:
       command: [docker, logs]
     then:
-      output: ["(no logs yet)"]
+      output: ["catalog-service listening on :3000"]
 
-  # `docker exec web ...` - inspect the nginx docroot.
   - id: exec-web
     when:
       command: [docker, exec]
@@ -260,7 +258,6 @@ scenarios:
         - "50x.html"
         - "index.html"
 
-  # `docker stop <name>` - specific cases flip the matching state flag.
   - id: stop-web
     when:
       command: [docker, stop]
@@ -291,8 +288,6 @@ scenarios:
     then:
       output: ["{{ args.0 }}"]
 
-  # `docker ps -a` shows running + exited containers. Placed before the plain
-  # `docker ps` scenarios below (all share the [docker, ps] prefix; -a wins here).
   - id: ps-all
     when:
       command: [docker, ps]
@@ -307,24 +302,21 @@ scenarios:
   # ===========================================================================
   # docker ps - reflects what's running. First match wins, latest-section first.
   # ===========================================================================
-  - id: ps-compose
+  - id: ps-stack
     when:
       command: [docker, ps]
-      state: { compose.up: true }
+      state: { stack.up: true }
     then:
       output:
-        - "CONTAINER ID   IMAGE                   STATUS          PORTS                    NAMES"
-        - "aa11bb22cc33   product-catalog         Up 20 seconds   0.0.0.0:3000->3000/tcp   catalog-backend-1"
-        - "dd44ee55ff66   postgres:16             Up 22 seconds   5432/tcp                 catalog-db-1"
-
-  - id: ps-catalog
-    when:
-      command: [docker, ps]
-      state: { app.running: true }
-    then:
-      output:
-        - "CONTAINER ID   IMAGE             STATUS          PORTS                    NAMES"
-        - "aa11bb22cc33   product-catalog   Up 15 seconds   0.0.0.0:3000->3000/tcp   catalog"
+        - "CONTAINER ID   IMAGE                       STATUS          PORTS                    NAMES"
+        - "aa11bb22cc33   catalog-service:baseline    Up 20 seconds   0.0.0.0:3000->3000/tcp   catalog-backend-1"
+        - "bb22cc33dd44   catalog-frontend            Up 20 seconds   0.0.0.0:5173->5173/tcp   catalog-frontend-1"
+        - "cc33dd44ee55   postgres:16                 Up 22 seconds   5432/tcp                 catalog-postgres-1"
+        - "dd44ee55ff66   confluentinc/cp-kafka       Up 22 seconds   9092/tcp                 catalog-kafka-1"
+        - "ee55ff66aa77   localstack/localstack:3     Up 22 seconds   4566/tcp                 catalog-localstack-1"
+        - "ff66aa77bb88   wiremock/wiremock:3.5.4     Up 22 seconds   8080/tcp                 catalog-wiremock-1"
+        - "1a2b3c4d5e6f   dpage/pgadmin4              Up 22 seconds   0.0.0.0:5050->80/tcp     catalog-pgadmin-1"
+        - "2b3c4d5e6f7a   provectuslabs/kafka-ui      Up 22 seconds   0.0.0.0:8080->8080/tcp   catalog-kafka-ui-1"
 
   - id: ps-web-and-pg
     when:
@@ -361,45 +353,174 @@ scenarios:
       output: ["CONTAINER ID   IMAGE   COMMAND   STATUS   PORTS   NAMES"]
 
   # ===========================================================================
-  # Section 6 - build the Product Catalog image
-  # `docker build -t product-catalog .` - -t is the first flag, so it's always a
-  # captured key. Match on -t.
+  # Section 6 - meet the Product Catalog (clone + explore)
+  # The clone is cosmetic - the app is already seeded at the workspace root, which
+  # is what the built-in ls/cat/tree reflect. It just makes the "fetch it first"
+  # flow match a real laptop.
   # ===========================================================================
-  - id: build-catalog
+  - id: git-clone
+    when:
+      command: [git, clone]
+    then:
+      output:
+        - "Cloning into 'catalog-service-node'..."
+        - { text: "remote: Enumerating objects: 168, done.", delay: short }
+        - "remote: Counting objects: 100% (168/168), done."
+        - "remote: Compressing objects: 100% (112/112), done."
+        - { text: "Receiving objects: 100% (168/168), 61.30 KiB | 6.13 MiB/s, done.", delay: clone }
+        - "Resolving deltas: 100% (44/44), done."
+
+  - id: git-version
+    when:
+      command: [git]
+      args: { --version: { any: true } }
+    then:
+      output: ["git version 2.45.2"]
+
+  # ===========================================================================
+  # Section 7 - build & run with Compose
+  # `docker build -t catalog-service:baseline .` - -t is the first flag, so it's
+  # always a captured key. Match on -t.
+  # ===========================================================================
+  - id: build-baseline
     when:
       command: [docker, build]
-      args: { -t: { oneOf: [product-catalog] } }
+      args: { -t: { oneOf: [catalog-service:baseline] } }
     then:
-      state: { app.built: true }
+      state: { baseline.built: true }
       output:
-        - { text: "[+] Building 12.4s (10/10) FINISHED", delay: build }
-        - " => [internal] load build definition from Dockerfile"
-        - { text: " => [1/5] FROM docker.io/library/node:20-slim", delay: pull }
-        - " => [internal] load build context"
-        - { text: " => [2/5] WORKDIR /app", delay: short }
-        - { text: " => [3/5] COPY package*.json ./", delay: short }
-        - { text: " => [4/5] RUN npm install --production", delay: build }
-        - { text: " => [5/5] COPY . .", delay: short }
-        - { text: " => exporting to image", delay: build }
-        - " => => naming to docker.io/library/product-catalog:latest"
+        - { text: "[+] Building 0.4s (2/9) FROM docker.io/library/node:20", delay: pull }
+        - { text: "[+] Building 6.1s (5/9) RUN npm install --production", delay: build }
+        - { text: "  => resolved 431 packages from the public npm registry", delay: short }
+        - { text: "[+] Building 58.7s (9/9) exporting to image", delay: build }
+        - " => => naming to docker.io/library/catalog-service:baseline"
+        - ""
+        - "Built catalog-service:baseline (1.1GB, 431 packages). It runs - but you"
+        - "haven't measured what's inside it yet."
 
-  - id: build-generic
+  - id: npm-install
     when:
-      command: [docker, build]
+      command: [npm, install]
     then:
-      state: { app.built: true }
       output:
-        - { text: "[+] Building 12.1s (10/10) FINISHED", delay: build }
-        - " => exporting to image"
+        - { text: "added 431 packages in 6s", delay: build }
+        - "72 packages are looking for funding"
 
-  - id: run-catalog
+  - id: npm-run-unit
     when:
-      command: [docker, run]
-      args: { --name: { oneOf: [catalog] } }
+      command: [npm, run]
+      args: { 0: { oneOf: [unit-test] } }
     then:
-      state: { app.running: true }
       output:
-        - { text: "b9a8c7d6e5f40312a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8", delay: start }
+        - "> catalog-service-node@1.0.0 unit-test"
+        - "> vitest run test/unit"
+        - ""
+        - { text: " ✓ test/unit/ProductService.test.js (6 tests) 41ms", delay: short }
+        - "   ✓ getProducts returns all products"
+        - "   ✓ getProductById returns a single product"
+        - "   ✓ createProduct rejects a duplicate SKU"
+        - ""
+        - " Test Files  1 passed (1)"
+        - "      Tests  6 passed (6)"
+
+  - id: npm-run-integration
+    when:
+      command: [npm, run]
+      args: { 0: { oneOf: [integration-test] } }
+    then:
+      output:
+        - "> catalog-service-node@1.0.0 integration-test"
+        - "> vitest run test/integration"
+        - ""
+        - { text: " ↑ Testcontainers: starting postgres:16 ...", delay: pull }
+        - { text: " ↑ Testcontainers: starting confluentinc/cp-kafka:7.6.0 ...", delay: pull }
+        - { text: " ↑ Testcontainers: starting localstack/localstack:3 ...", delay: pull }
+        - { text: "   containers ready - wiring DATABASE_URL / KAFKA_BROKER to mapped ports", delay: short }
+        - ""
+        - { text: " ✓ test/integration/products.test.js (5 tests) 2.10s", delay: scan }
+        - "   ✓ creates a product and reads it back from Postgres"
+        - "   ✓ publishes a 'product created' event to Kafka"
+        - "   ✓ stores an uploaded image in S3 (LocalStack)"
+        - "   ✓ rejects a duplicate UPC"
+        - ""
+        - { text: " ↓ Testcontainers: tearing down all containers", delay: short }
+        - " Test Files  1 passed (1)"
+        - "      Tests  5 passed (5)"
+
+  - id: npm-run-generic
+    when:
+      command: [npm, run]
+    then:
+      output: ["catalog-service listening on :3000"]
+
+  # docker compose up - the full app stack (backend, frontend, postgres, kafka,
+  # localstack, wiremock, and the pgAdmin / Kafka-UI visualizers).
+  - id: compose-up
+    when:
+      command: [docker, compose]
+      args: { 0: { oneOf: [up] } }
+    then:
+      state: { stack.up: true }
+      output:
+        - { text: " ✔ Network catalog_default          Created", delay: short }
+        - { text: " ✔ Container catalog-postgres-1      Started", delay: pull }
+        - { text: " ✔ Container catalog-kafka-1         Started", delay: pull }
+        - { text: " ✔ Container catalog-localstack-1    Started", delay: pull }
+        - { text: " ✔ Container catalog-wiremock-1      Started", delay: short }
+        - { text: " ✔ Container catalog-pgadmin-1       Started", delay: short }
+        - { text: " ✔ Container catalog-kafka-ui-1      Started", delay: short }
+        - { text: " ✔ Container catalog-backend-1       Started", delay: build }
+        - { text: " ✔ Container catalog-frontend-1      Started", delay: short }
+        - ""
+        - "The stack is up:"
+        - "  API          http://localhost:3000/api/products"
+        - "  Web client   http://localhost:5173"
+        - "  pgAdmin      http://localhost:5050"
+        - "  Kafka UI     http://localhost:8080"
+
+  - id: compose-ps
+    when:
+      command: [docker, compose]
+      args: { 0: { oneOf: [ps] } }
+    then:
+      output:
+        - "NAME                   IMAGE                      STATUS         PORTS"
+        - "catalog-backend-1      catalog-service:baseline   Up 20 seconds  0.0.0.0:3000->3000/tcp"
+        - "catalog-frontend-1     catalog-frontend           Up 20 seconds  0.0.0.0:5173->5173/tcp"
+        - "catalog-postgres-1     postgres:16                Up 22 seconds  5432/tcp"
+        - "catalog-kafka-1        confluentinc/cp-kafka      Up 22 seconds  9092/tcp"
+        - "catalog-localstack-1   localstack/localstack:3    Up 22 seconds  4566/tcp"
+        - "catalog-wiremock-1     wiremock/wiremock:3.5.4    Up 22 seconds  8080/tcp"
+        - "catalog-pgadmin-1      dpage/pgadmin4             Up 22 seconds  0.0.0.0:5050->80/tcp"
+        - "catalog-kafka-ui-1     provectuslabs/kafka-ui     Up 22 seconds  0.0.0.0:8080->8080/tcp"
+
+  - id: compose-logs
+    when:
+      command: [docker, compose]
+      args: { 0: { oneOf: [logs] } }
+    then:
+      output:
+        - "catalog-postgres-1  | database system is ready to accept connections"
+        - "catalog-kafka-1     | started (kafka.server.KafkaServer)"
+        - "catalog-backend-1   | catalog-service listening on :3000"
+        - "catalog-backend-1   | GET /api/products 200 - 4ms"
+
+  - id: compose-down
+    when:
+      command: [docker, compose]
+      args: { 0: { oneOf: [down] } }
+    then:
+      state: { stack.up: false }
+      output:
+        - { text: " ✔ Container catalog-frontend-1      Removed", delay: short }
+        - { text: " ✔ Container catalog-backend-1       Removed", delay: short }
+        - { text: " ✔ Container catalog-kafka-ui-1      Removed", delay: short }
+        - { text: " ✔ Container catalog-pgadmin-1       Removed", delay: short }
+        - { text: " ✔ Container catalog-wiremock-1      Removed", delay: short }
+        - { text: " ✔ Container catalog-localstack-1    Removed", delay: short }
+        - { text: " ✔ Container catalog-kafka-1         Removed", delay: short }
+        - { text: " ✔ Container catalog-postgres-1      Removed", delay: short }
+        - " ✔ Network catalog_default          Removed"
 
   - id: curl-products
     when:
@@ -413,79 +534,124 @@ scenarios:
         - "]"
 
   # ===========================================================================
-  # Section 7 - Compose (the whole stack)
-  # `docker compose <sub>` - positional 0 is the subcommand.
+  # Section 9 - scan for vulnerabilities with Docker Scout
   # ===========================================================================
-  - id: compose-up
+  - id: scout-quickview-baseline
     when:
-      command: [docker, compose]
-      args: { 0: { oneOf: [up] } }
+      command: [docker, scout, quickview]
+      args: { 0: { oneOf: [catalog-service:baseline] } }
     then:
-      state: { compose.up: true, app.running: false }
       output:
-        - { text: " ✔ Network catalog_default      Created", delay: short }
-        - { text: " ✔ Container catalog-db-1        Started", delay: pull }
-        - { text: " ✔ Container catalog-backend-1   Started", delay: start }
+        - { text: "    ✓ Image stored for indexing", delay: short }
+        - { text: "    ✓ Indexed 431 packages", delay: scan }
+        - "  Target             │  catalog-service:baseline  │    0C     8H    41M    93L"
+        - "    digest           │  3af1c9e0b2d4              │"
+        - "  Base image  node:20 │  updatable to node:24     │    0C     6H    30M    54L"
+        - ""
+        - "  8 High and dozens of Medium/Low CVEs - almost all from the base image and"
+        - "  the 431 packages it drags in. Look closer with:  docker scout cves"
 
-  - id: compose-ps
+  - id: scout-quickview-dhi
     when:
-      command: [docker, compose]
-      args: { 0: { oneOf: [ps] } }
+      command: [docker, scout, quickview]
+      args: { 0: { oneOf: [catalog-service:dhi] } }
     then:
       output:
-        - "NAME                IMAGE             STATUS         PORTS"
-        - "catalog-backend-1   product-catalog   Up 20 seconds  0.0.0.0:3000->3000/tcp"
-        - "catalog-db-1        postgres:16       Up 22 seconds  5432/tcp"
+        - { text: "    ✓ Indexed 78 packages", delay: scan }
+        - "  Target                                │  catalog-service:dhi  │    0C     0H     1M     4L"
+        - "    digest                              │  9e2b71c4a0f8         │"
+        - "  Base  dhi.io/node:24  (hardened, distroless)  │    0C     0H     0M     0L"
+        - ""
+        - "  0 Critical, 0 High. Same app - a hardened base and 353 fewer packages."
 
-  - id: compose-logs
+  - id: scout-cves
     when:
-      command: [docker, compose]
-      args: { 0: { oneOf: [logs] } }
+      command: [docker, scout, cves]
     then:
       output:
-        - "catalog-db-1        | database system is ready to accept connections"
-        - "catalog-backend-1   | product-catalog listening on :3000"
-        - "catalog-backend-1   | GET /api/products 200 - 4ms"
+        - { text: "    ✓ Indexed 431 packages", delay: scan }
+        - "    ✗ Detected 8 vulnerable packages with 8 vulnerabilities"
+        - ""
+        - "   ✗ HIGH CVE-2024-4068  in  braces 3.0.2"
+        - "   ✗ HIGH CVE-2024-37890 in  ws 8.11.0"
+        - "   ✗ HIGH CVE-2024-28849 in  follow-redirects 1.15.5"
+        - "   ✗ HIGH CVE-2023-45857 in  axios 1.7.2"
+        - "   ... 4 more high-severity findings"
+        - ""
+        - "8 vulnerabilities found in 8 packages"
 
-  - id: compose-down
+  - id: scout-compare
     when:
-      command: [docker, compose]
-      args: { 0: { oneOf: [down] } }
+      command: [docker, scout, compare]
     then:
-      state: { compose.up: false }
       output:
-        - { text: " ✔ Container catalog-backend-1   Removed", delay: short }
-        - { text: " ✔ Container catalog-db-1        Removed", delay: short }
-        - " ✔ Network catalog_default      Removed"
+        - { text: "    ✓ Indexed both images", delay: scan }
+        - "  Comparing  catalog-service:dhi  to  catalog-service:baseline"
+        - ""
+        - "  Critical      0   =   0"
+        - "  High          0   ←   8    (-8)"
+        - "  Medium        1   ←  41    (-40)"
+        - "  Low           4   ←  93    (-89)"
+        - "  Packages     78   ← 431    (-353)"
+        - "  Size       248MB  ← 1.1GB  (-77%)"
+        - ""
+        - "  Same application. Near-zero vulnerabilities. That's the Hardened Image."
 
   # ===========================================================================
-  # tree - handy for exploring the seeded project (built-in ls/cat also work).
+  # Section 10 - harden it with a Docker Hardened Image (DHI)
+  # `docker build -t catalog-service:dhi ...` - -t is the first flag.
   # ===========================================================================
-  - id: tree-built
+  - id: build-dhi
+    when:
+      command: [docker, build]
+      args: { -t: { oneOf: [catalog-service:dhi] } }
+    then:
+      state: { dhi.built: true }
+      output:
+        - { text: "[+] Building 0.3s FROM dhi.io/node:24-debian13-dev (build stage)", delay: pull }
+        - { text: "[+] Building 7.4s (7/12) RUN npm ci --production --ignore-scripts", delay: build }
+        - { text: "[+] Building 9.1s FROM dhi.io/node:24-debian13 (distroless runtime)", delay: build }
+        - { text: "[+] Building 31.2s (12/12) exporting to image", delay: build }
+        - " => => naming to docker.io/library/catalog-service:dhi"
+        - ""
+        - "Built catalog-service:dhi (248MB, 78 packages) - non-root, no shell, no npm"
+        - "in the final image. Now measure it with docker scout."
+
+  - id: build-generic
+    when:
+      command: [docker, build]
+      args: { -t: { any: true } }
+    then:
+      state: { baseline.built: true }
+      output:
+        - { text: "[+] Building 58.9s (9/9) FINISHED", delay: build }
+        - " => => naming to {{ args.t }}"
+
+  # ===========================================================================
+  # tree - explore the seeded project (built-in ls/cat also work).
+  # ===========================================================================
+  - id: tree-dhi
     when:
       command: [tree]
-      state: { app.built: true }
+      state: { dhi.built: true }
     then:
       output:
         - "."
-        - "├── Dockerfile          ← you wrote this"
+        - "├── Dockerfile"
+        - "├── Dockerfile.dhi       ← you wrote this (hardened, multi-stage)"
+        - "├── compose.yaml"
         - "├── README.md"
         - "├── package.json"
-        - "├── package-lock.json"
-        - "├── db"
-        - "│   └── schema.sql"
+        - "├── db/schema.sql"
         - "├── src"
         - "│   ├── index.js"
-        - "│   ├── routes"
-        - "│   │   └── products.js"
-        - "│   └── db"
-        - "│       └── pool.js"
+        - "│   ├── routes/products.js"
+        - "│   ├── services/ProductService.js"
+        - "│   ├── db/pool.js"
+        - "│   └── events/kafka.js"
         - "└── frontend"
         - "    ├── package.json"
-        - "    └── src"
-        - "        └── App.jsx"
-        - ""
-        - "6 directories, 11 files"
+        - "    └── src/App.jsx"
 
   - id: tree-src
     when:
@@ -493,23 +659,21 @@ scenarios:
     then:
       output:
         - "."
+        - "├── Dockerfile"
+        - "├── compose.yaml"
         - "├── README.md"
         - "├── package.json"
         - "├── package-lock.json"
-        - "├── db"
-        - "│   └── schema.sql"
+        - "├── db/schema.sql"
         - "├── src"
         - "│   ├── index.js"
-        - "│   ├── routes"
-        - "│   │   └── products.js"
-        - "│   └── db"
-        - "│       └── pool.js"
+        - "│   ├── routes/products.js"
+        - "│   ├── services/ProductService.js"
+        - "│   ├── db/pool.js"
+        - "│   └── events/kafka.js"
         - "└── frontend"
         - "    ├── package.json"
-        - "    └── src"
-        - "        └── App.jsx"
-        - ""
-        - "6 directories, 10 files"
+        - "    └── src/App.jsx"
 
   # ===========================================================================
   # Generic docker run fallback (kept LAST so specific runs above win).

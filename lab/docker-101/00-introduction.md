@@ -32,6 +32,8 @@ flow through the outer loop into production.
 
 ## What you'll do
 
+**Part 1 — Docker fundamentals**
+
 | Section | You'll learn to… |
 |---------|------------------|
 | 1 | Understand containers and run your very first one |
@@ -39,10 +41,20 @@ flow through the outer loop into production.
 | 3 | Run a **PostgreSQL** database and talk to it |
 | 4 | Pull, list, and tag **images** from a registry |
 | 5 | Inspect, stop, and remove **containers** |
-| 6 | **Build your own image** for a real Node.js app |
-| 7 | Bring a whole stack up with **Docker Compose** |
 
-You'll finish by containerising the **Product Catalog** — a small Node.js + Postgres
-service that's waiting for you in this workspace.
+**Part 2 — a real app, end to end (the Product Catalog SDLC)**
+
+| Section | You'll learn to… |
+|---------|------------------|
+| 6 | **Clone** the Product Catalog and explore it |
+| 7 | **Build** its image and run the whole stack with **Compose** |
+| 8 | **Test** it with unit and integration (Testcontainers) tests |
+| 9 | **Scan** it for vulnerabilities with **Docker Scout** |
+| 10 | **Harden** it with a **Docker Hardened Image** — vulnerabilities near-zero |
+
+The star of Part 2 is the **Product Catalog** — a real Node.js service (Postgres,
+Kafka, LocalStack, WireMock) that's waiting for you in this workspace. You'll follow
+it through the whole software development lifecycle: **develop → build → test →
+secure**.
 
 Ready? Continue to **What Is a Container?**
