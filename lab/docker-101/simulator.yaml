@@ -1,0 +1,522 @@
+version: "2.0"
+
+metadata:
+  id: docker-101
+  title: "Docker 101"
+  summary: >
+    A beginner's tour of Docker: run containers, publish ports, work with images,
+    build your own, and bring a multi-container app up with Compose. Every command
+    is deterministic and simulated - no real daemon, images, or network.
+
+# In-memory state. Scenarios read it in `when.state` and write it in `then.state`.
+# The lab is linear, so these flags track what the learner has started so far.
+state:
+  web:
+    running: false      # nginx web server (Section 2)
+  pg:
+    running: false      # postgres1 database (Section 3)
+  app:
+    built: false        # product-catalog image built (Section 6)
+    running: false      # product-catalog container running (Section 6)
+  compose:
+    up: false           # full stack up via compose (Section 7)
+
+# Cosmetic pacing so pulls/builds don't print instantly.
+settings:
+  pace:
+    pull: 700     # simulated layer download
+    build: 900    # simulated build step
+    start: 500    # simulated container start
+
+defaults:
+  unmatched:
+    stderr: ["command not found - this command isn't part of the Docker 101 lab."]
+    exit: 1
+
+scenarios:
+  # ===========================================================================
+  # Section 1 - environment checks & first container
+  # ===========================================================================
+  - id: docker-version
+    when:
+      command: [docker, version]
+    then:
+      output:
+        - "Client:"
+        - " Version:           29.7.2"
+        - " API version:       1.52"
+        - " OS/Arch:           darwin/arm64"
+        - "Server: Docker Desktop"
+        - " Engine:"
+        - "  Version:          29.7.2"
+        - "  API version:      1.52 (minimum version 1.24)"
+
+  - id: docker-version-short
+    when:
+      command: [docker]
+      args: { --version: true }
+    then:
+      output: ["Docker version 29.7.2, build 9d8c1a2"]
+
+  - id: docker-info
+    when:
+      command: [docker, info]
+    then:
+      output:
+        - "Client: Docker Desktop 4.50.0"
+        - " Version:    29.7.2"
+        - "Server:"
+        - " Containers: 0"
+        - "  Running: 0   Paused: 0   Stopped: 0"
+        - " Images: 0"
+        - " Server Version: 29.7.2"
+        - " Operating System: Docker Desktop"
+        - " Total Memory: 7.657GiB"
+
+  # `docker run hello-world` - no flags, so positional 0 is the image reliably.
+  - id: run-hello-world
+    when:
+      command: [docker, run]
+      args: { 0: { oneOf: [hello-world] } }
+    then:
+      output:
+        - "Unable to find image 'hello-world:latest' locally"
+        - { text: "latest: Pulling from library/hello-world", delay: short }
+        - { text: "c1ec31eb5944: Pull complete", delay: pull }
+        - "Status: Downloaded newer image for hello-world:latest"
+        - ""
+        - "Hello from Docker!"
+        - "This message shows that your installation appears to be working correctly."
+        - ""
+        - "To generate this message, Docker took the following steps:"
+        - " 1. The Docker client contacted the Docker daemon."
+        - " 2. The daemon pulled the \"hello-world\" image from Docker Hub."
+        - " 3. The daemon created a new container from that image."
+        - " 4. The daemon streamed that output to the client, which sent it to you."
+
+  # ===========================================================================
+  # Section 2 - run nginx as a web server
+  # Every `docker run` in this lab puts --name FIRST so it's always a captured
+  # key regardless of how following flags parse. Match on --name.
+  # ===========================================================================
+  - id: run-nginx
+    when:
+      command: [docker, run]
+      args: { --name: { oneOf: [web] } }
+    then:
+      state: { web.running: true }
+      output:
+        - "Unable to find image 'nginx:latest' locally"
+        - { text: "latest: Pulling from library/nginx", delay: short }
+        - { text: "9c704ecd0c69: Pull complete", delay: pull }
+        - { text: "d4b2a3e8f1c7: Pull complete", delay: pull }
+        - "Status: Downloaded newer image for nginx:latest"
+        - { text: "7b3a9f4c1e0d8a2b6c5f4e3d2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b", delay: start }
+
+  - id: curl-nginx
+    when:
+      command: [curl]
+      args: { 0: { oneOf: ["http://localhost:8080"] } }
+    then:
+      output:
+        - "<!DOCTYPE html>"
+        - "<html>"
+        - "<head>"
+        - "<title>Welcome to nginx!</title>"
+        - "</head>"
+        - "<body>"
+        - "<h1>Welcome to nginx!</h1>"
+        - "<p>If you see this page, the nginx web server is successfully installed"
+        - "and working. Further configuration is required.</p>"
+        - "</body>"
+        - "</html>"
+
+  # ===========================================================================
+  # Section 3 - run Postgres
+  # ===========================================================================
+  - id: run-postgres
+    when:
+      command: [docker, run]
+      args: { --name: { oneOf: [postgres1] } }
+    then:
+      state: { pg.running: true }
+      output:
+        - "Unable to find image 'postgres:16' locally"
+        - { text: "16: Pulling from library/postgres", delay: short }
+        - { text: "a1f1879bb7de: Pull complete", delay: pull }
+        - { text: "b2c3d4e5f6a7: Pull complete", delay: pull }
+        - "Status: Downloaded newer image for postgres:16"
+        - { text: "f0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d", delay: start }
+
+  # `docker exec postgres1 psql ...` - positional 0 is the container name (no
+  # dashed token precedes it), so this matches both parser models.
+  - id: exec-psql-list
+    when:
+      command: [docker, exec]
+      args: { 0: { oneOf: [postgres1] } }
+    then:
+      output:
+        - "                                  List of databases"
+        - "   Name    |  Owner   | Encoding |  Collate   |   Ctype    | Access privileges"
+        - "-----------+----------+----------+------------+------------+-------------------"
+        - " postgres  | postgres | UTF8     | en_US.utf8 | en_US.utf8 |"
+        - " template0 | postgres | UTF8     | en_US.utf8 | en_US.utf8 | =c/postgres"
+        - " template1 | postgres | UTF8     | en_US.utf8 | en_US.utf8 | =c/postgres"
+        - "(3 rows)"
+
+  # ===========================================================================
+  # Section 4 - images & registries
+  # ===========================================================================
+  - id: docker-pull
+    when:
+      command: [docker, pull]
+      args: { 0: { any: true } }
+    then:
+      output:
+        - "Using default tag: latest"
+        - { text: "latest: Pulling from library/{{ args.0 }}", delay: short }
+        - { text: "3f4d90e3a1b2: Pull complete", delay: pull }
+        - { text: "7a8b9c0d1e2f: Pull complete", delay: pull }
+        - "Status: Downloaded newer image for {{ args.0 }}:latest"
+
+  - id: docker-tag
+    when:
+      command: [docker, tag]
+    then:
+      output: [""]
+
+  - id: docker-history
+    when:
+      command: [docker, history]
+    then:
+      output:
+        - "IMAGE          CREATED       CREATED BY                                      SIZE"
+        - "9c704ecd0c69   2 weeks ago   CMD [\"nginx\" \"-g\" \"daemon off;\"]                0B"
+        - "<missing>      2 weeks ago   EXPOSE map[80/tcp:{}]                           0B"
+        - "<missing>      2 weeks ago   COPY docker-entrypoint.sh / # buildkit          7.6kB"
+        - "<missing>      2 weeks ago   /bin/sh -c #(nop) ADD file:… in /               77.8MB"
+
+  # `docker images` after the product-catalog build shows the image you built on
+  # top of the base images used earlier in the lab.
+  - id: images-built
+    when:
+      command: [docker, images]
+      state: { app.built: true }
+    then:
+      output:
+        - "REPOSITORY        TAG       IMAGE ID       CREATED          SIZE"
+        - "product-catalog   latest    a1b2c3d4e5f6   10 seconds ago   214MB"
+        - "postgres          16        b2c3d4e5f6a7   2 weeks ago      438MB"
+        - "nginx             latest    9c704ecd0c69   2 weeks ago      192MB"
+        - "hello-world       latest    c1ec31eb5944   4 months ago     20.4kB"
+
+  - id: images-base
+    when:
+      command: [docker, images]
+    then:
+      output:
+        - "REPOSITORY     TAG       IMAGE ID       CREATED        SIZE"
+        - "postgres       16        b2c3d4e5f6a7   2 weeks ago    438MB"
+        - "nginx          latest    9c704ecd0c69   2 weeks ago    192MB"
+        - "hello-world    latest    c1ec31eb5944   4 months ago   20.4kB"
+
+  # ===========================================================================
+  # Section 5 - managing containers
+  # `docker logs <name>` - positional 0 is the container name (matches both models).
+  # ===========================================================================
+  - id: logs-web
+    when:
+      command: [docker, logs]
+      args: { 0: { oneOf: [web] } }
+    then:
+      output:
+        - "/docker-entrypoint.sh: Configuration complete; ready for start up"
+        - "nginx: using the \"epoll\" event method"
+        - "nginx: start worker processes"
+        - "172.17.0.1 - - \"GET / HTTP/1.1\" 200 615 \"curl/8.7.1\""
+
+  - id: logs-catalog
+    when:
+      command: [docker, logs]
+      args: { 0: { oneOf: [catalog] } }
+    then:
+      output:
+        - "product-catalog listening on :3000"
+        - "GET /api/products 200 - 4ms"
+
+  - id: logs-generic
+    when:
+      command: [docker, logs]
+    then:
+      output: ["(no logs yet)"]
+
+  # `docker exec web ...` - inspect the nginx docroot.
+  - id: exec-web
+    when:
+      command: [docker, exec]
+      args: { 0: { oneOf: [web] } }
+    then:
+      output:
+        - "50x.html"
+        - "index.html"
+
+  # `docker stop <name>` - specific cases flip the matching state flag.
+  - id: stop-web
+    when:
+      command: [docker, stop]
+      args: { 0: { oneOf: [web] } }
+    then:
+      state: { web.running: false }
+      output: ["web"]
+
+  - id: stop-postgres
+    when:
+      command: [docker, stop]
+      args: { 0: { oneOf: [postgres1] } }
+    then:
+      state: { pg.running: false }
+      output: ["postgres1"]
+
+  - id: stop-generic
+    when:
+      command: [docker, stop]
+      args: { 0: { any: true } }
+    then:
+      output: ["{{ args.0 }}"]
+
+  - id: rm-generic
+    when:
+      command: [docker, rm]
+      args: { 0: { any: true } }
+    then:
+      output: ["{{ args.0 }}"]
+
+  # `docker ps -a` shows running + exited containers. Placed before the plain
+  # `docker ps` scenarios below (all share the [docker, ps] prefix; -a wins here).
+  - id: ps-all
+    when:
+      command: [docker, ps]
+      args: { -a: true }
+    then:
+      output:
+        - "CONTAINER ID   IMAGE         COMMAND                  STATUS                     PORTS                    NAMES"
+        - "7b3a9f4c1e0d   nginx         \"/docker-entrypoint.…\"   Up 5 minutes               0.0.0.0:8080->80/tcp     web"
+        - "f0e1d2c3b4a5   postgres:16   \"docker-entrypoint.s…\"   Up 3 minutes               0.0.0.0:5432->5432/tcp   postgres1"
+        - "c1ec31eb5944   hello-world   \"/hello\"                 Exited (0) 8 minutes ago                            heuristic_swartz"
+
+  # ===========================================================================
+  # docker ps - reflects what's running. First match wins, latest-section first.
+  # ===========================================================================
+  - id: ps-compose
+    when:
+      command: [docker, ps]
+      state: { compose.up: true }
+    then:
+      output:
+        - "CONTAINER ID   IMAGE                   STATUS          PORTS                    NAMES"
+        - "aa11bb22cc33   product-catalog         Up 20 seconds   0.0.0.0:3000->3000/tcp   catalog-backend-1"
+        - "dd44ee55ff66   postgres:16             Up 22 seconds   5432/tcp                 catalog-db-1"
+
+  - id: ps-catalog
+    when:
+      command: [docker, ps]
+      state: { app.running: true }
+    then:
+      output:
+        - "CONTAINER ID   IMAGE             STATUS          PORTS                    NAMES"
+        - "aa11bb22cc33   product-catalog   Up 15 seconds   0.0.0.0:3000->3000/tcp   catalog"
+
+  - id: ps-web-and-pg
+    when:
+      command: [docker, ps]
+      state: { web.running: true, pg.running: true }
+    then:
+      output:
+        - "CONTAINER ID   IMAGE         STATUS          PORTS                    NAMES"
+        - "7b3a9f4c1e0d   nginx         Up 5 minutes    0.0.0.0:8080->80/tcp     web"
+        - "f0e1d2c3b4a5   postgres:16   Up 3 minutes    0.0.0.0:5432->5432/tcp   postgres1"
+
+  - id: ps-pg
+    when:
+      command: [docker, ps]
+      state: { pg.running: true }
+    then:
+      output:
+        - "CONTAINER ID   IMAGE         STATUS          PORTS                    NAMES"
+        - "f0e1d2c3b4a5   postgres:16   Up 3 minutes    0.0.0.0:5432->5432/tcp   postgres1"
+
+  - id: ps-web
+    when:
+      command: [docker, ps]
+      state: { web.running: true }
+    then:
+      output:
+        - "CONTAINER ID   IMAGE   STATUS          PORTS                  NAMES"
+        - "7b3a9f4c1e0d   nginx   Up 2 seconds    0.0.0.0:8080->80/tcp   web"
+
+  - id: ps-empty
+    when:
+      command: [docker, ps]
+    then:
+      output: ["CONTAINER ID   IMAGE   COMMAND   STATUS   PORTS   NAMES"]
+
+  # ===========================================================================
+  # Section 6 - build the Product Catalog image
+  # `docker build -t product-catalog .` - -t is the first flag, so it's always a
+  # captured key. Match on -t.
+  # ===========================================================================
+  - id: build-catalog
+    when:
+      command: [docker, build]
+      args: { -t: { oneOf: [product-catalog] } }
+    then:
+      state: { app.built: true }
+      output:
+        - { text: "[+] Building 12.4s (10/10) FINISHED", delay: build }
+        - " => [internal] load build definition from Dockerfile"
+        - { text: " => [1/5] FROM docker.io/library/node:20-slim", delay: pull }
+        - " => [internal] load build context"
+        - { text: " => [2/5] WORKDIR /app", delay: short }
+        - { text: " => [3/5] COPY package*.json ./", delay: short }
+        - { text: " => [4/5] RUN npm install --production", delay: build }
+        - { text: " => [5/5] COPY . .", delay: short }
+        - { text: " => exporting to image", delay: build }
+        - " => => naming to docker.io/library/product-catalog:latest"
+
+  - id: build-generic
+    when:
+      command: [docker, build]
+    then:
+      state: { app.built: true }
+      output:
+        - { text: "[+] Building 12.1s (10/10) FINISHED", delay: build }
+        - " => exporting to image"
+
+  - id: run-catalog
+    when:
+      command: [docker, run]
+      args: { --name: { oneOf: [catalog] } }
+    then:
+      state: { app.running: true }
+      output:
+        - { text: "b9a8c7d6e5f40312a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8", delay: start }
+
+  - id: curl-products
+    when:
+      command: [curl]
+      args: { 0: { oneOf: ["http://localhost:3000/api/products"] } }
+    then:
+      output:
+        - "["
+        - "  {\"id\":1,\"name\":\"Widget\",\"sku\":\"WGT-001\",\"price\":\"9.99\"},"
+        - "  {\"id\":2,\"name\":\"Gadget\",\"sku\":\"GDG-002\",\"price\":\"19.99\"}"
+        - "]"
+
+  # ===========================================================================
+  # Section 7 - Compose (the whole stack)
+  # `docker compose <sub>` - positional 0 is the subcommand.
+  # ===========================================================================
+  - id: compose-up
+    when:
+      command: [docker, compose]
+      args: { 0: { oneOf: [up] } }
+    then:
+      state: { compose.up: true, app.running: false }
+      output:
+        - { text: " ✔ Network catalog_default      Created", delay: short }
+        - { text: " ✔ Container catalog-db-1        Started", delay: pull }
+        - { text: " ✔ Container catalog-backend-1   Started", delay: start }
+
+  - id: compose-ps
+    when:
+      command: [docker, compose]
+      args: { 0: { oneOf: [ps] } }
+    then:
+      output:
+        - "NAME                IMAGE             STATUS         PORTS"
+        - "catalog-backend-1   product-catalog   Up 20 seconds  0.0.0.0:3000->3000/tcp"
+        - "catalog-db-1        postgres:16       Up 22 seconds  5432/tcp"
+
+  - id: compose-logs
+    when:
+      command: [docker, compose]
+      args: { 0: { oneOf: [logs] } }
+    then:
+      output:
+        - "catalog-db-1        | database system is ready to accept connections"
+        - "catalog-backend-1   | product-catalog listening on :3000"
+        - "catalog-backend-1   | GET /api/products 200 - 4ms"
+
+  - id: compose-down
+    when:
+      command: [docker, compose]
+      args: { 0: { oneOf: [down] } }
+    then:
+      state: { compose.up: false }
+      output:
+        - { text: " ✔ Container catalog-backend-1   Removed", delay: short }
+        - { text: " ✔ Container catalog-db-1        Removed", delay: short }
+        - " ✔ Network catalog_default      Removed"
+
+  # ===========================================================================
+  # tree - handy for exploring the seeded project (built-in ls/cat also work).
+  # ===========================================================================
+  - id: tree-built
+    when:
+      command: [tree]
+      state: { app.built: true }
+    then:
+      output:
+        - "."
+        - "├── Dockerfile          ← you wrote this"
+        - "├── README.md"
+        - "├── package.json"
+        - "├── package-lock.json"
+        - "├── db"
+        - "│   └── schema.sql"
+        - "├── src"
+        - "│   ├── index.js"
+        - "│   ├── routes"
+        - "│   │   └── products.js"
+        - "│   └── db"
+        - "│       └── pool.js"
+        - "└── frontend"
+        - "    ├── package.json"
+        - "    └── src"
+        - "        └── App.jsx"
+        - ""
+        - "6 directories, 11 files"
+
+  - id: tree-src
+    when:
+      command: [tree]
+    then:
+      output:
+        - "."
+        - "├── README.md"
+        - "├── package.json"
+        - "├── package-lock.json"
+        - "├── db"
+        - "│   └── schema.sql"
+        - "├── src"
+        - "│   ├── index.js"
+        - "│   ├── routes"
+        - "│   │   └── products.js"
+        - "│   └── db"
+        - "│       └── pool.js"
+        - "└── frontend"
+        - "    ├── package.json"
+        - "    └── src"
+        - "        └── App.jsx"
+        - ""
+        - "6 directories, 10 files"
+
+  # ===========================================================================
+  # Generic docker run fallback (kept LAST so specific runs above win).
+  # ===========================================================================
+  - id: run-generic
+    when:
+      command: [docker, run]
+    then:
+      output:
+        - { text: "d0c9b8a7f6e5d4c3b2a1908f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d", delay: start }

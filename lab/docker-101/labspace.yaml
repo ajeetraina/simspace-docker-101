@@ -1,0 +1,172 @@
+title: "Docker 101"
+description: >
+  Your first hour with Docker, entirely in the browser. Run containers, publish
+  ports, work with images and registries, then containerise a real Node.js app -
+  the Product Catalog service - and bring the whole stack up with Compose. Every
+  command is simulated, so nothing breaks and there is nothing to install.
+
+# Landing-page card. Shown when this repo has two or more labs; harmless for a
+# single lab. labs.json is GENERATED from this block - never edit labs.json by hand.
+catalog:
+  icon: sailing
+  order: 2
+  tags: ["docker", "containers", "beginner", "compose", "getting started"]
+  estimatedMinutes: 60
+
+# Command behaviour lives in simulator.yaml (relative to this file).
+simulator: simulator.yaml
+
+# One terminal for the whole lab. It's a single virtual machine and filesystem.
+terminals:
+  - id: main
+    title: Terminal
+    icon: terminal
+
+# Seed the virtual filesystem with the Product Catalog source. Built-in ls/cat
+# reflect these immediately; the Dockerfile and compose.yaml you write later are
+# added on top by save-as blocks.
+files:
+  README.md: |
+    # product-catalog
+
+    A small Product Catalog service: a REST API over a PostgreSQL product
+    database, with a React frontend. In this lab you containerise it.
+
+    Layout:
+      backend    src/            Express API (Node.js)
+      frontend   frontend/       React SPA (Vite)
+      database   db/schema.sql   PostgreSQL schema + seed data
+
+    Run locally:  npm install && npm start   (needs PostgreSQL)
+    API:          http://localhost:3000/api/products
+
+    There is no Dockerfile yet. You write one in Section 6.
+  package.json: |
+    {
+      "name": "product-catalog",
+      "version": "1.0.0",
+      "description": "Product Catalog REST API over PostgreSQL",
+      "main": "src/index.js",
+      "scripts": {
+        "start": "node src/index.js",
+        "dev": "nodemon src/index.js"
+      },
+      "dependencies": {
+        "express": "^4.19.2",
+        "pg": "^8.11.5"
+      },
+      "devDependencies": {
+        "nodemon": "^3.1.0"
+      }
+    }
+  package-lock.json: |
+    {
+      "name": "product-catalog",
+      "version": "1.0.0",
+      "lockfileVersion": 3,
+      "requires": true,
+      "packages": {}
+    }
+  src/index.js: |
+    const express = require("express");
+    const products = require("./routes/products");
+
+    const app = express();
+    app.use(express.json());
+    app.use("/api/products", products);
+
+    app.listen(3000, () => console.log("product-catalog listening on :3000"));
+  src/routes/products.js: |
+    const { Router } = require("express");
+    const { pool } = require("../db/pool");
+
+    const router = Router();
+
+    router.get("/", async (_req, res) => {
+      const { rows } = await pool.query("SELECT * FROM products ORDER BY id");
+      res.json(rows);
+    });
+
+    router.get("/:id", async (req, res) => {
+      const { rows } = await pool.query("SELECT * FROM products WHERE id = $1", [req.params.id]);
+      if (!rows.length) return res.status(404).json({ error: "not found" });
+      res.json(rows[0]);
+    });
+
+    module.exports = router;
+  src/db/pool.js: |
+    const { Pool } = require("pg");
+
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+    module.exports = { pool };
+  db/schema.sql: |
+    CREATE TABLE IF NOT EXISTS products (
+      id    SERIAL PRIMARY KEY,
+      name  TEXT NOT NULL,
+      sku   TEXT UNIQUE NOT NULL,
+      price NUMERIC(10, 2) NOT NULL DEFAULT 0
+    );
+
+    INSERT INTO products (name, sku, price) VALUES
+      ('Widget', 'WGT-001', 9.99),
+      ('Gadget', 'GDG-002', 19.99)
+    ON CONFLICT (sku) DO NOTHING;
+  frontend/package.json: |
+    {
+      "name": "product-catalog-frontend",
+      "version": "1.0.0",
+      "private": true,
+      "scripts": { "dev": "vite", "build": "vite build" },
+      "dependencies": {
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1"
+      },
+      "devDependencies": {
+        "vite": "^5.2.0"
+      }
+    }
+  frontend/src/App.jsx: |
+    import { useEffect, useState } from "react";
+
+    export default function App() {
+      const [products, setProducts] = useState([]);
+      useEffect(() => {
+        fetch("/api/products").then((r) => r.json()).then(setProducts);
+      }, []);
+      return (
+        <main>
+          <h1>Product Catalog</h1>
+          <ul>
+            {products.map((p) => (
+              <li key={p.id}>{p.name} - ${p.price}</li>
+            ))}
+          </ul>
+        </main>
+      );
+    }
+
+# Ordered instruction pages (markdown), rendered in the left-hand panel.
+sections:
+  - title: Introduction
+    contentPath: 00-introduction.md
+  - title: "What Is a Container?"
+    contentPath: 01-what-is-a-container.md
+  - title: "Run Your First Web Server"
+    contentPath: 02-first-web-server.md
+  - title: "Run a Database"
+    contentPath: 03-run-a-database.md
+  - title: "Images & Registries"
+    contentPath: 04-images-and-registries.md
+  - title: "Managing Containers"
+    contentPath: 05-managing-containers.md
+  - title: "Build Your Own Image"
+    contentPath: 06-build-your-own-image.md
+  - title: "Multi-Container Apps with Compose"
+    contentPath: 07-compose.md
+  - title: Conclusion
+    contentPath: 08-conclusion.md
+
+# $$name$$ in markdown is replaced with these values.
+variables:
+  image: product-catalog
